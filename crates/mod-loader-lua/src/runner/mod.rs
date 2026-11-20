@@ -6,7 +6,7 @@ use tracing::info;
 use crate::{env::{AppFeatures, AppState}, lua::{FunctionArgs, LuaVM}, runner::state::{RunnerLocalState, RunnerState}};
 
 mod state;
-mod order;
+pub(crate) mod order;
 
 pub struct LuaModRunner {
     pub(crate) lua: LuaVM,
@@ -42,14 +42,20 @@ impl LuaModRunner {
         // dependencies and `run_after` first, the mod's id second
 
         let mods = self.state.mods();
-        let order = order::run_order(mods.values().map(|r#mod| r#mod.info()))
+        let order = order::run_order(
+            mods.values().map(|r#mod| r#mod.info()),
+            app_state.skip_version_conflicts(),
+        )
             .map_err(|e| ModRunError {
                 mod_id: e.mod_id,
                 error: e.message,
             })?;
 
-        for warning in &order.warnings {
-            tracing::warn!("{warning}");
+        if !order.skipped.is_empty() {
+            tracing::warn!(
+                mods = order.skipped.join(", "),
+                "Mods left out because of a version conflict",
+            );
         }
 
         info!(order = order.ids.join(", "), "Mod order");

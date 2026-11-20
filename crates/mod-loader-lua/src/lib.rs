@@ -32,6 +32,9 @@ pub struct RunOptions {
     /// If true, the mods run and every changed resource is serialized, but no game
     /// file and no cache file is written.
     pub dry_run: bool,
+    /// If true, a mod that asks for another version of a mod than the one installed is
+    /// left out, with every mod that needs it. If false, such a mod stops the run.
+    pub skip_version_conflicts: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +99,16 @@ impl RunFailure {
         format!("{what}\n\n{}\n\n{state}", self.error)
     }
 
+}
+
+pub use crate::runner::order::{ConflictReport, VersionConflict};
+
+/// The mods that ask for another version of an installed mod than the one installed.
+/// A run stops at these unless [`RunOptions::skip_version_conflicts`] is set.
+pub fn version_conflicts(env: &ModEnvironment) -> ConflictReport {
+    crate::runner::order::version_conflicts(
+        env.mod_registry().values().map(|r#mod| r#mod.info()),
+    )
 }
 
 /// How far a run has come with the game files: decides what an internal error

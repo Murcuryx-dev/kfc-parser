@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use camino::{Utf8Path, Utf8PathBuf};
 use mod_loader::{lua::{self, RunArgs, RunOptions}, runtime, Config, ModEnvironment};
 
-use crate::{log::error, logging};
+use crate::{log::{error, info}, logging};
 
 pub fn init(config: Config) {
     logging::setup();
@@ -63,6 +63,34 @@ pub fn init(config: Config) {
         }
     };
 
+    // A mod that needs another version of a mod than the one installed: the player
+    // decides. Nothing is remembered, so the question comes back at every start
+    // until the mods fit.
+    let conflicts = lua::version_conflicts(&env);
+
+    if !conflicts.is_empty() {
+        error!(
+            conflicts = conflicts.description(),
+            "Version conflicts between mods"
+        );
+
+        let start = crate::ask_yes_no(
+            "Enshrouded Mod Loader",
+            &format!(
+                "A mod needs another version of a mod than the one installed:\n\n{}\n\
+                Yes: start the game without the mods named above.\n\
+                No: do not start the game.\n\n\
+                This message comes back at every start until the mods are updated.",
+                conflicts.description(),
+            ),
+        );
+
+        if !start {
+            info!("The player chose not to start the game");
+            crate::end_process();
+        }
+    }
+
     let result = lua::run(
         &env,
         RunArgs {
@@ -72,6 +100,8 @@ pub fn init(config: Config) {
                 export: config.use_export_flag,
                 export_dir: config.export_directory.map(PathBuf::from),
                 runtime: true,
+                // only reached with conflicts when the player chose to go on
+                skip_version_conflicts: true,
                 ..Default::default()
             },
         },

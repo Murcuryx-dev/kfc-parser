@@ -15,7 +15,7 @@ use windows::{
             SystemInformation::GetSystemDirectoryA,
             SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH},
         },
-        UI::WindowsAndMessaging::{MB_OK, MessageBoxA, SW_SHOW, ShowWindow},
+        UI::WindowsAndMessaging::{IDYES, MB_ICONWARNING, MB_OK, MB_YESNO, MessageBoxA, SW_SHOW, ShowWindow},
     },
     core::{BOOL, PCSTR},
 };
@@ -597,6 +597,35 @@ pub fn show_message(title: &str, text: &str) {
             MB_OK,
         );
     }
+}
+
+/// Asks a yes / no question. Closing the window counts as no.
+pub fn ask_yes_no(title: &str, text: &str) -> bool {
+    let title = CString::new(title).unwrap_or_default();
+    let text = CString::new(text.replace('\0', " ")).unwrap_or_default();
+
+    unsafe {
+        MessageBoxA(
+            None,
+            PCSTR::from_raw(text.as_ptr() as _),
+            PCSTR::from_raw(title.as_ptr() as _),
+            MB_YESNO | MB_ICONWARNING,
+        ) == IDYES
+    }
+}
+
+/// Ends the game process now, before the game has started.
+pub fn end_process() -> ! {
+    use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+
+    // This runs while the DLL is being loaded. Ending the process the normal way
+    // would unload every DLL under the loader's lock; nothing of the game runs yet,
+    // so there is nothing to save.
+    unsafe {
+        let _ = TerminateProcess(GetCurrentProcess(), 0);
+    }
+
+    std::process::abort()
 }
 
 fn panic_handler(info: &PanicHookInfo) {

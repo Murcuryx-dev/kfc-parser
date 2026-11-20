@@ -71,8 +71,11 @@ recognize and load it. Below is a detailed explanation of each field in the mani
   a `version` requirement (for example `"^1.2"` or `"*"`) and, if the mod also works
   without it, `"optional": true`.
   A dependency always runs before your mod. If a dependency that is not optional is
-  missing, no mod is applied and the user is told which mod is missing. A dependency
-  that is installed in another version than asked for is reported as a warning in the log.
+  missing, no mod is applied and the user is told which mod is missing.
+  If a dependency is installed in another version than your mod asks for, the user is
+  told which mod needs which version and chooses at every start of the game: start
+  without your mod (and without the mods that need it), or do not start the game.
+  With `emm run` this is an error unless `--skip-version-conflicts` is given.
 - `run_after` (string list, optional): Ids of mods that your mod runs after when they
   are installed. Nothing happens when one of them is not installed. Use it when your
   mod changes the same data as another mod and has to see that mod's changes.

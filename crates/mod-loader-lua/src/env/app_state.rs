@@ -31,6 +31,7 @@ pub struct AppState {
 
 pub struct AppConfig {
     skip_cache: bool,
+    skip_version_conflicts: bool,
     is_server: bool,
 
     feature_flags: AppFeatures,
@@ -103,6 +104,7 @@ impl AppState {
 
         let config = AppConfig {
             skip_cache,
+            skip_version_conflicts: options.skip_version_conflicts,
             export_dir,
 
             is_server,
@@ -155,6 +157,11 @@ impl AppState {
     #[inline]
     pub fn env(&self) -> &ModEnvironment {
         &self.env
+    }
+
+    #[inline]
+    pub fn skip_version_conflicts(&self) -> bool {
+        self.config.skip_version_conflicts
     }
 
     #[inline]

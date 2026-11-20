@@ -50,6 +50,11 @@ pub enum Commands {
         /// Force patching even if already patched
         #[arg(short, long, default_value_t = false)]
         force: bool,
+
+        /// Leave out mods that need another version of a mod than the one installed
+        /// (and the mods that need them) instead of stopping
+        #[arg(long, default_value_t = false)]
+        skip_version_conflicts: bool,
     },
 
     /// Run everything a game start runs (patch, and export if eml.json enables it)

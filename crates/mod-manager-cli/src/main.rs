@@ -31,7 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             game_directory,
             export_directory,
             file_name,
-            force
+            force,
+            skip_version_conflicts,
         } => run(
             game_directory,
             file_name,
@@ -43,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             export_directory,
             false,
+            skip_version_conflicts,
         ),
         Commands::Check {
             game_directory,
@@ -65,6 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 None,
                 true,
+                false,
             )
         }
         Commands::Restore {
@@ -297,6 +300,7 @@ fn run(
     _runtime: bool,
     export_directory: Option<PathBuf>,
     dry_run: bool,
+    skip_version_conflicts: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let export_directory = match export_directory {
         Some(dir) => dir,
@@ -318,8 +322,7 @@ fn run(
         Ok(registry) => registry,
         Err(e) => {
             if let Some(error) = e.error {
-                error!("Error loading mod environment: {}", error);
-                return Ok(());
+                return Err(format!("Error loading mod environment: {error}").into());
             }
 
             error!("Errors loading some mods:");
@@ -341,7 +344,7 @@ fn run(
                 }
             }
 
-            return Ok(());
+            return Err("Some mods could not be loaded, nothing was applied".into());
         }
     };
 
@@ -355,6 +358,7 @@ fn run(
                 export,
                 export_dir: Some(export_directory),
                 dry_run,
+                skip_version_conflicts,
                 ..Default::default()
             },
         },
