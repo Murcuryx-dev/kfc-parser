@@ -91,10 +91,17 @@ impl LuaModRunner {
             })?;
 
             // what this mod cost: time, and Lua values the loader now keeps for it
+            let seconds = started.elapsed().as_secs_f64();
+            let values_kept = crate::lua::held_live() - values_before;
+
+            // which resources it changed, for the report of resources that more than
+            // one mod changed
+            app_state.record_changes(&r#mod.info().id, &self.lua);
+
             info!(
                 mod_id = r#mod.info().id,
-                seconds = format!("{:.2}", started.elapsed().as_secs_f64()),
-                values_kept = crate::lua::held_live() - values_before,
+                seconds = format!("{seconds:.2}"),
+                values_kept = values_kept,
                 "Mod finished",
             );
         }

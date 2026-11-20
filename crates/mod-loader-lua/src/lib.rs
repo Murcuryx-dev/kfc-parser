@@ -327,6 +327,18 @@ fn run_inner(
 
     let app_state = runner.lua.app_data_ref::<AppState>().unwrap();
 
+    // Which mods changed the same resources. That is not an error (two mods may add
+    // to the same list), but when a mod seems to do nothing, this is where to look:
+    // the mod that ran later saw, and may have replaced, what the earlier one did.
+    let shared_report = shared_resources_report(&app_state);
+
+    if !dry_run && let Some(report) = &shared_report {
+        // best effort, like the list of applied resources
+        let _ = std::fs::write(env.cache_dir().join("shared_resources.txt"), report);
+    } else if !dry_run {
+        let _ = std::fs::remove_file(env.cache_dir().join("shared_resources.txt"));
+    }
+
     if app_state.has_feature(AppFeatures::PATCH) {
         info!("Applying patches...");
 
@@ -467,6 +479,58 @@ fn run_inner(
             .collect::<Vec<_>>(),
         failure: None,
     })
+}
+
+/// Logs which mods changed the same resources and returns the full list as text,
+/// or `None` when no resource was changed by more than one mod.
+fn shared_resources_report(app_state: &AppState) -> Option<String> {
+    use std::{collections::BTreeMap, fmt::Write as _};
+
+    let shared = app_state.shared_resources();
+
+    if shared.is_empty() {
+        info!("No resource was changed by more than one mod");
+        return None;
+    }
+
+    // per group of mods, in the order they ran: how many resources, and of which types
+    let mut groups: BTreeMap<Vec<String>, BTreeMap<String, usize>> = BTreeMap::new();
+
+    for resource in &shared {
+        *groups.entry(resource.mods.clone()).or_default()
+            .entry(resource.type_name.clone()).or_insert(0) += 1;
+    }
+
+    let mut report = String::new();
+
+    let _ = writeln!(report, "Resources changed by more than one mod: {}", shared.len());
+    let _ = writeln!(report, "The mods are named in the order they ran. A later mod saw what an earlier one did and may have replaced it.");
+    let _ = writeln!(report);
+
+    for (mods, types) in &groups {
+        let count: usize = types.values().sum();
+        let types = types.iter()
+            .map(|(name, count)| format!("{count} {name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        crate::log::warn!(
+            mods = mods.join(" -> "),
+            resources = count,
+            types = types,
+            "Mods changed the same resources",
+        );
+
+        let _ = writeln!(report, "{}: {count} ({types})", mods.join(" -> "));
+    }
+
+    let _ = writeln!(report);
+
+    for resource in &shared {
+        let _ = writeln!(report, "{} {} : {}", resource.resource_id, resource.type_name, resource.mods.join(" -> "));
+    }
+
+    Some(report)
 }
 
 /// FNV-1a, the same on every machine and in every run.
