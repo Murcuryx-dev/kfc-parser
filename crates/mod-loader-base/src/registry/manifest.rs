@@ -13,6 +13,10 @@ pub struct ModManifest {
     // optional
     #[serde(default)]
     pub dependencies: Vec<Dependency>,
+    /// Mods this one runs after when they are installed. Unlike a dependency,
+    /// a mod named here does not have to be installed.
+    #[serde(default)]
+    pub run_after: Vec<String>,
 
     // optional descriptive
     #[serde(default)]

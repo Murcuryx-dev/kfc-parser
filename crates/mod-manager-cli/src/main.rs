@@ -209,6 +209,7 @@ fn create(
 
         capabilities,
         dependencies: vec![],
+        run_after: vec![],
 
         description: None,
         authors: vec![mod_author],

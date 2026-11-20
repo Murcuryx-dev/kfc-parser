@@ -67,7 +67,30 @@ recognize and load it. Below is a detailed explanation of each field in the mani
   You may also include a `LICENSE` file in your mod directory.
 - `icon` (string, optional): Path to an icon file (e.g., `icon.png`) that represents your mod.
   This icon will be displayed in the mod manager.
-- `dependencies` (WIP): A list of other mods that your mod depends on.
+- `dependencies` (list, optional): Other mods that your mod needs. Each entry has an `id`,
+  a `version` requirement (for example `"^1.2"` or `"*"`) and, if the mod also works
+  without it, `"optional": true`.
+  A dependency always runs before your mod. If a dependency that is not optional is
+  missing, no mod is applied and the user is told which mod is missing. A dependency
+  that is installed in another version than asked for is reported as a warning in the log.
+- `run_after` (string list, optional): Ids of mods that your mod runs after when they
+  are installed. Nothing happens when one of them is not installed. Use it when your
+  mod changes the same data as another mod and has to see that mod's changes.
+
+Mods that do not have to wait for each other run in the order of their ids. The order
+is written to the log (`Mod order`). Mods that wait for each other in a circle are not
+applied and the circle is named.
+
+```json
+{
+  "id": "my_mod",
+  "name": "My Mod",
+  "version": "1.0.0",
+  "capabilities": ["patch"],
+  "dependencies": [{ "id": "some_library", "version": "^2.0" }],
+  "run_after": ["another_mod"]
+}
+```
 
 ## Writing Your Mod
 

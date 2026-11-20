@@ -6,6 +6,7 @@ use tracing::info;
 use crate::{env::{AppFeatures, AppState}, lua::{FunctionArgs, LuaVM}, runner::state::{RunnerLocalState, RunnerState}};
 
 mod state;
+mod order;
 
 pub struct LuaModRunner {
     pub(crate) lua: LuaVM,
@@ -16,7 +17,7 @@ pub struct LuaModRunner {
 #[derive(Debug)]
 pub struct ModRunError {
     pub mod_id: String,
-    pub error: mlua::Error,
+    pub error: String,
 }
 
 impl LuaModRunner {
@@ -38,7 +39,22 @@ impl LuaModRunner {
     pub fn run(&self) -> Result<(), ModRunError> {
         let app_state = self.lua.app_data_ref::<AppState>().unwrap();
 
-        for r#mod in self.state.mods().values() {
+        // dependencies and `run_after` first, the mod's id second
+
+        let mods = self.state.mods();
+        let order = order::run_order(mods.values().map(|r#mod| r#mod.info()))
+            .map_err(|e| ModRunError {
+                mod_id: e.mod_id,
+                error: e.message,
+            })?;
+
+        for warning in &order.warnings {
+            tracing::warn!("{warning}");
+        }
+
+        info!(order = order.ids.join(", "), "Mod order");
+
+        for r#mod in order.ids.iter().map(|id| &mods[id]) {
             let has_patch_capability = r#mod.info().capabilities.contains(&Capability::Patch);
             let has_export_capability = r#mod.info().capabilities.contains(&Capability::Export);
             let should_run =
@@ -65,7 +81,7 @@ impl LuaModRunner {
                 &self.lua
             ).map_err(|error| ModRunError {
                 mod_id: r#mod.info().id.clone(),
-                error,
+                error: error.to_string(),
             })?;
 
             // what this mod cost: time, and Lua values the loader now keeps for it
