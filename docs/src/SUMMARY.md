@@ -14,6 +14,7 @@
   - [Loader](./eml/api/loader.md)
   - [Buffer](./eml/api/buffer.md)
   - [Image](./eml/api/image.md)
+  - [Animation](./eml/api/animation.md)
   - [Types](./eml/api/types.md)
   - [IO](./eml/api/io.md)
   - [Utilities](./eml/api/utilities.md)

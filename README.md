@@ -22,6 +22,8 @@ Mods written for EML 0.2.0 load unchanged. What is different:
 | A report per mod | Time and memory use of every mod in the log. |
 | Binary data in one step | An array of numbers can be filled from a buffer instead of one Lua table per element. |
 | Lua lists | `a[#a + 1] = v` and `a[#a] = nil` work on the game's arrays. |
+| Animations | `game.animation.import` makes a clip of the game from a `.manm` file of the mod, with events and root motion. |
+| Shared resources | The log and `.cache/shared_resources.txt` name the resources that more than one mod changed, and in which order. |
 
 ### What the loader does on your computer
 
