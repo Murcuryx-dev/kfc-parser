@@ -12,8 +12,18 @@ local function number_of(value)
     return tonumber(tostring(value))
 end
 
+-- Errors carry no place of their own: `public` below gives them the line of the mod
+-- that called.
 local function fail(message)
-    error("game.animation: " .. message, 3)
+    error("game.animation: " .. message, 0)
+end
+
+local function public(f)
+    return function(...)
+        local results = table.pack(pcall(f, ...))
+        if not results[1] then error(results[2], 2) end
+        return table.unpack(results, 2, results.n)
+    end
 end
 
 -- A template may be given as a resource or as its id.
@@ -23,7 +33,7 @@ local function resource_of(template, type_name, what)
         if not resource then fail(what .. " " .. template .. " (" .. type_name .. ") was not found") end
         return resource
     end
-    if template == nil then fail("no " .. what .. " given") end
+    if template == nil then fail(what .. " is missing") end
     return template
 end
 
@@ -170,4 +180,4 @@ local function import(file, template, options)
     return result
 end
 
-game.animation = { read = read, import = import }
+game.animation = { read = public(read), import = public(import) }
