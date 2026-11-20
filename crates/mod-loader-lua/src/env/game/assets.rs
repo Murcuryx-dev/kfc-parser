@@ -45,7 +45,7 @@ fn lua_get_resource(
         part.unwrap_or(0)
     );
 
-    Ok(app_state.get_resource_info(&guid)
+    Ok(app_state.get_resource_info(&guid, lua)
         .map(Resource::new))
 }
 
@@ -72,7 +72,7 @@ fn lua_get_resource_parts(
             continue;
         }
 
-        let resource = match app_state.get_resource_info(guid) {
+        let resource = match app_state.get_resource_info(guid, lua) {
             Some(info) => Resource::new(info),
             None => {
                 warn!("Resource info not found for GUID: {}", guid);
@@ -98,7 +98,7 @@ fn lua_get_resources_by_type(
     let result = lua.create_table_with_capacity(file.resources().len(), 0)?;
 
     for guid in file.resources_by_type(r#type.qualified_hash) {
-        let resource = match app_state.get_resource_info(guid) {
+        let resource = match app_state.get_resource_info(guid, lua) {
             Some(info) => Resource::new(info),
             None => {
                 warn!("Resource info not found for GUID: {}", guid);
@@ -122,7 +122,7 @@ fn lua_get_all_resources(
     let result = lua.create_table_with_capacity(file.resources().len(), 0)?;
 
     for guid in file.resources().keys() {
-        let resource = match app_state.get_resource_info(guid) {
+        let resource = match app_state.get_resource_info(guid, lua) {
             Some(info) => Resource::new(info),
             None => {
                 warn!("Resource info not found for GUID: {}", guid);
@@ -195,7 +195,7 @@ fn lua_create_resource(
         )?
     };
 
-    Ok(app_state.get_resource_info(&guid)
+    Ok(app_state.get_resource_info(&guid, lua)
         .map(Resource::new)
         .expect("just created resource info must exist"))
 }

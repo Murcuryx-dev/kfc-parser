@@ -330,6 +330,8 @@ fn run_inner(
     // Which mods changed the same resources. That is not an error (two mods may add
     // to the same list), but when a mod seems to do nothing, this is where to look:
     // the mod that ran later saw, and may have replaced, what the earlier one did.
+    app_state.finish_changes(&runner.lua);
+
     let shared_report = shared_resources_report(&app_state);
 
     if !dry_run && let Some(report) = &shared_report {

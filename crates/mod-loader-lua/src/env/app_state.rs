@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell, RefMut}, collections::{BTreeMap, HashMap, HashSet, hash_map::{self, Entry}}, rc::Rc};
+use std::{cell::{Cell, RefCell, RefMut}, collections::{HashMap, hash_map::{self, Entry}}, rc::Rc};
 
 use bitflags::bitflags;
 use mod_loader::ModEnvironment;
@@ -32,14 +32,19 @@ pub struct AppState {
     changes: RefCell<ChangeLog>,
 }
 
-/// Which mods changed which resources, found by comparing each resource a mod was
-/// handed with what it looked like before that mod ran.
+/// Which mods changed which resources.
+///
+/// Only resources that were handed to more than one mod are looked at: when such a
+/// resource is handed to the next mod, and once more at the end of the run, it is
+/// serialized and compared with what it looked like the time before. A difference
+/// is the work of the mod that had it in between.
 #[derive(Default)]
 struct ChangeLog {
-    /// The resources handed out since the last mod finished.
-    touched: HashSet<ResourceId>,
-    /// The fingerprint of each changed resource after the last mod that changed it.
-    fingerprints: HashMap<ResourceId, u64>,
+    /// The mods each resource was handed to, in the order they ran.
+    handed: HashMap<ResourceId, Vec<String>>,
+    /// What a resource looked like when it was last compared. `None` (or no entry)
+    /// is the unchanged resource of the game.
+    checkpoints: HashMap<ResourceId, Option<u64>>,
     /// The mods that changed a resource, in the order they ran.
     writers: HashMap<ResourceId, Vec<String>>,
 }
@@ -268,11 +273,21 @@ impl AppState {
     pub fn get_resource_info(
         &self,
         guid: &ResourceId,
+        lua: &mlua::Lua,
+    ) -> Option<Rc<ResourceInfo>> {
+        let info = self.find_resource_info(guid)?;
+
+        self.note_handed(&info, lua);
+
+        Some(info)
+    }
+
+    fn find_resource_info(
+        &self,
+        guid: &ResourceId,
     ) -> Option<Rc<ResourceInfo>> {
         match self.resources.borrow_mut().entry(*guid) {
             Entry::Occupied(entry) => {
-                self.changes.borrow_mut().touched.insert(*guid);
-
                 Some(entry.get().clone())
             },
             Entry::Vacant(entry) => {
@@ -289,7 +304,6 @@ impl AppState {
                 let info = Rc::new(info);
 
                 entry.insert(info.clone());
-                self.changes.borrow_mut().touched.insert(*guid);
 
                 Some(info)
             }
@@ -304,7 +318,9 @@ impl AppState {
     ) -> mlua::Result<()> {
         let mut resources = self.resources.borrow_mut();
 
-        self.changes.borrow_mut().touched.insert(*guid);
+        // the mod that creates a resource is the first one that has it
+        self.changes.borrow_mut().handed.entry(*guid).or_default()
+            .push(self.running_mod.borrow().0.clone());
 
         if resources.contains_key(guid) {
             return Err(LuaError::generic(format!(
@@ -336,52 +352,85 @@ impl AppState {
         Ok(())
     }
 
-    /// Called when a mod has finished: finds the resources it changed.
-    ///
-    /// Every resource the mod was handed is serialized and compared with what it
-    /// looked like after the last mod that changed it (or with "unchanged").
-    pub fn record_changes(&self, mod_id: &str, lua: &mlua::Lua) {
-        let mut touched: Vec<ResourceId> = self.changes.borrow_mut().touched.drain().collect();
+    /// Notes that the running mod is handed a resource. If another mod had it
+    /// before, this is the moment to see whether that mod changed it.
+    fn note_handed(&self, info: &ResourceInfo, lua: &mlua::Lua) {
+        let resource_id = info.resource_id;
+        let previous = {
+            let mut changes = self.changes.borrow_mut();
+            let running = self.running_mod.borrow();
+            let handed = changes.handed.entry(resource_id).or_default();
 
-        touched.sort();
+            if handed.last().is_some_and(|last| *last == running.0) {
+                return;
+            }
 
-        let mut buf = Vec::new();
+            let previous = handed.last().cloned();
 
-        for resource_id in touched {
+            handed.push(running.0.clone());
+
+            previous
+        };
+
+        if let Some(previous) = previous {
+            self.compare_with_checkpoint(info, &previous, lua);
+        }
+    }
+
+    /// Serializes a resource and compares it with its checkpoint. If it differs,
+    /// `mod_id` (the mod that had it since) changed it.
+    fn compare_with_checkpoint(&self, info: &ResourceInfo, mod_id: &str, lua: &mlua::Lua) {
+        let resource_id = info.resource_id;
+        // a value that cannot be applied is reported when the patches are applied
+        let now = match info.apply(lua) {
+            Ok(Some(value)) => {
+                let Some(r#type) = self.type_registry
+                    .get_by_hash(LookupKey::Qualified(resource_id.type_hash())) else {
+                    return;
+                };
+                let mut buf = Vec::new();
+
+                if value.write_into(&self.type_registry, r#type, &mut buf).is_err() {
+                    return;
+                }
+
+                let mut hash: u64 = 0xcbf29ce484222325;
+
+                for byte in &buf {
+                    hash ^= u64::from(*byte);
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+
+                Some(hash)
+            }
+            Ok(None) => None,
+            Err(_) => return,
+        };
+
+        let mut changes = self.changes.borrow_mut();
+        let before = changes.checkpoints.insert(resource_id, now).flatten();
+
+        if before != now {
+            changes.writers.entry(resource_id).or_default().push(mod_id.to_string());
+        }
+    }
+
+    /// Called when all mods have run: looks at what the last mod that had each
+    /// shared resource did to it.
+    pub fn finish_changes(&self, lua: &mlua::Lua) {
+        let mut last: Vec<(ResourceId, String)> = self.changes.borrow().handed.iter()
+            .filter(|(_, mods)| mods.len() > 1)
+            .filter_map(|(resource_id, mods)| Some((*resource_id, mods.last()?.clone())))
+            .collect();
+
+        last.sort();
+
+        for (resource_id, mod_id) in last {
             let Some(info) = self.resources.borrow().get(&resource_id).cloned() else {
                 continue;
             };
-            // a value that cannot be applied is reported when the patches are applied
-            let Ok(Some(value)) = info.apply(lua) else {
-                continue;
-            };
-            let Some(r#type) = self.type_registry
-                .get_by_hash(LookupKey::Qualified(resource_id.type_hash())) else {
-                continue;
-            };
 
-            buf.clear();
-
-            if value.write_into(&self.type_registry, r#type, &mut buf).is_err() {
-                continue;
-            }
-
-            let mut hash: u64 = 0xcbf29ce484222325;
-
-            for byte in &buf {
-                hash ^= u64::from(*byte);
-                hash = hash.wrapping_mul(0x100000001b3);
-            }
-
-            let mut changes = self.changes.borrow_mut();
-
-            if changes.fingerprints.insert(resource_id, hash) != Some(hash) {
-                let writers = changes.writers.entry(resource_id).or_default();
-
-                if writers.last().map(String::as_str) != Some(mod_id) {
-                    writers.push(mod_id.to_string());
-                }
-            }
+            self.compare_with_checkpoint(&info, &mod_id, lua);
         }
     }
 
@@ -403,19 +452,6 @@ impl AppState {
         shared.sort_by_key(|shared| shared.resource_id);
 
         shared
-    }
-
-    /// How many resources each mod changed.
-    pub fn changed_by_mod(&self) -> BTreeMap<String, usize> {
-        let mut counts = BTreeMap::new();
-
-        for mods in self.changes.borrow().writers.values() {
-            for mod_id in mods {
-                *counts.entry(mod_id.clone()).or_insert(0) += 1;
-            }
-        }
-
-        counts
     }
 
     /// Tells the state which mod runs now; new resource ids are counted per mod.
