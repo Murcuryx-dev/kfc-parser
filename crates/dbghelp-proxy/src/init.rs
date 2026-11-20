@@ -76,6 +76,12 @@ pub fn init(config: Config) {
         }
     };
 
+    // The mods were not applied, but the game files are in a known state: tell the
+    // player what happened and let the game start.
+    if let Some(failure) = &result.failure {
+        crate::show_message("Enshrouded Mod Loader", &failure.message());
+    }
+
     runtime::loader_attach(
         &env,
         runtime::RuntimeOptions {

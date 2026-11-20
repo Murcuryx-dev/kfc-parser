@@ -110,6 +110,21 @@ pub fn enable_console()  {
     }
 }
 
+/// Shows a message box and waits until it is closed.
+pub fn show_message(title: &str, text: &str) {
+    let title = CString::new(title).unwrap_or_default();
+    let text = CString::new(text.replace('\0', " ")).unwrap_or_default();
+
+    unsafe {
+        MessageBoxA(
+            None,
+            PCSTR::from_raw(text.as_ptr() as _),
+            PCSTR::from_raw(title.as_ptr() as _),
+            MB_OK,
+        );
+    }
+}
+
 fn panic_handler(info: &PanicHookInfo) {
     let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
         s.to_string()

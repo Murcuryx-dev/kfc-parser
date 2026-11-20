@@ -15,7 +15,8 @@ pub struct KFCWriter<F, T> {
     path: PathBuf,
     file_name: String,
 
-    file: File,
+    /// The index file. It is replaced as the last step of `finalize`.
+    kfc_path: PathBuf,
 
     chunk_writer: Cursor<Vec<u8>>,
     resource_writer: BufWriter<File>,
@@ -105,7 +106,8 @@ where
             file_name.as_ref(),
             options.kfc_extension
         ));
-        let file = File::options().write(true).read(true).open(&kfc_path)?;
+        // fail early if the index cannot be written; it is replaced in `finalize`
+        drop(File::options().write(true).read(true).open(&kfc_path)?);
 
         let resources_path = path.as_ref().join(format!(
             "{}.{}",
@@ -121,7 +123,7 @@ where
             path: path.as_ref().to_path_buf(),
             file_name: file_name.as_ref().to_string(),
 
-            file,
+            kfc_path,
 
             chunk_writer: Cursor::new(Vec::new()),
             resource_writer,
@@ -177,7 +179,8 @@ where
 
         drop(current_file);
 
-        let file = File::options().write(true).read(true).open(&kfc_path)?;
+        // fail early if the index cannot be written; it is replaced in `finalize`
+        drop(File::options().write(true).read(true).open(&kfc_path)?);
 
         let resources_path = path.as_ref().join(format!(
             "{}.{}",
@@ -209,7 +212,7 @@ where
             path: path.as_ref().into(),
             file_name: file_name.as_ref().to_string(),
 
-            file,
+            kfc_path,
             chunk_writer: Cursor::new(Vec::new()),
             resource_writer,
             uncompressed_offset: previous_uncompressed_size,
@@ -385,6 +388,7 @@ where
         // make sure to have a power of two container files
 
         let required_container_count = containers.len().next_power_of_two();
+        let mut padding_paths = Vec::new();
 
         while containers.len() < required_container_count {
             let path = self.dat_path(containers.len());
@@ -393,7 +397,7 @@ where
             // Clear stale mod data so these files match their zero-size index entries,
             // even when callers leave truncate_containers at its default value.
             if !path.exists() || self.options.truncate_containers || self.incremental_data.is_some() {
-                File::create(path)?;
+                padding_paths.push(path);
             }
 
             containers.push(ContainerInfo {
@@ -412,7 +416,8 @@ where
 
         // header construction
 
-        let mut file_writer = BufWriter::new(&mut self.file);
+        let kfc_temp_path = temp_path(&self.kfc_path);
+        let mut file_writer = BufWriter::new(File::create(&kfc_temp_path)?);
         let mut file = KFCFile::default();
 
         file.set_game_version(self.game_version);
@@ -427,6 +432,27 @@ where
         file.set_resource_chunks(chunks);
 
         file.write(&mut file_writer)?;
+
+        // The index is written beside the old one and replaces it in one step, so
+        // an interrupted write cannot leave a half-written index behind.
+
+        file_writer.flush()?;
+        file_writer.get_ref().sync_all()?;
+        drop(file_writer);
+
+        // Everything is written. Up to here nothing the current index refers to has
+        // been touched. Now the new containers take their final names, the padding
+        // containers are emptied, and the new index replaces the old one last.
+
+        for container_writer in std::mem::take(&mut self.container_writers) {
+            container_writer.commit()?;
+        }
+
+        for path in padding_paths {
+            File::create(path)?;
+        }
+
+        std::fs::rename(&kfc_temp_path, &self.kfc_path)?;
 
         Ok(())
     }
@@ -468,8 +494,9 @@ where
             ));
         }
 
-        let writer = BufWriter::new(File::create(&path)?);
-        let writer = ContainerWriter::new(next_index, writer);
+        let temp_path = temp_path(&path);
+        let writer = BufWriter::new(File::create(&temp_path)?);
+        let writer = ContainerWriter::new(next_index, writer, path, temp_path);
 
         self.container_writers.push(writer);
 
@@ -478,37 +505,79 @@ where
 
 }
 
+/// The name a file is written under until it is complete.
+fn temp_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".tmp");
+    PathBuf::from(name)
+}
+
+/// Writes one new container. The data goes to a temporary file beside the final
+/// one, which `commit` moves into place. A writer that is dropped without a commit
+/// removes its temporary file, so an aborted run leaves the existing containers,
+/// and with them the current index, intact.
 struct ContainerWriter {
     index: usize,
     count: usize,
-    writer: BufWriter<File>,
+    /// `None` once the file is closed.
+    writer: Option<BufWriter<File>>,
+    path: PathBuf,
+    temp_path: PathBuf,
+    committed: bool,
+}
+
+impl Drop for ContainerWriter {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temp_path);
+        }
+    }
 }
 
 impl ContainerWriter {
 
     #[inline]
-    fn new(index: usize, writer: BufWriter<File>) -> Self {
+    fn new(index: usize, writer: BufWriter<File>, path: PathBuf, temp_path: PathBuf) -> Self {
         Self {
             index,
             count: 0,
-            writer,
+            writer: Some(writer),
+            path,
+            temp_path,
+            committed: false,
         }
+    }
+
+    /// Moves the finished container to its final name, replacing an older one.
+    fn commit(mut self) -> std::io::Result<()> {
+        if let Some(writer) = self.writer.as_mut() {
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+        }
+
+        // the file must be closed before it can be renamed on Windows
+        drop(self.writer.take());
+
+        std::fs::rename(&self.temp_path, &self.path)?;
+        self.committed = true;
+
+        Ok(())
     }
 
     #[inline]
     fn aquire(&mut self) -> std::io::Result<&mut BufWriter<File>> {
         self.count += 1;
-        Ok(&mut self.writer)
+        Ok(self.writer.as_mut().expect("container writer is closed"))
     }
 
     #[inline]
     fn position(&mut self) -> std::io::Result<u64> {
-        self.writer.stream_position()
+        self.writer.as_mut().expect("container writer is closed").stream_position()
     }
 
     #[inline]
     fn flush(&mut self) -> std::io::Result<()> {
-        self.writer.flush()
+        self.writer.as_mut().expect("container writer is closed").flush()
     }
 
 }
@@ -568,6 +637,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn snapshot(directory: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<_> = fs::read_dir(directory).unwrap()
+            .map(|entry| entry.unwrap().path())
+            .map(|path| (path.file_name().unwrap().to_string_lossy().into_owned(), fs::read(&path).unwrap()))
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn aborted_run_leaves_index_and_containers_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let reference = reference(directory.path());
+
+        patch(directory.path(), &reference, 3).unwrap();
+        let before = snapshot(directory.path());
+        assert!(before.iter().all(|(name, _)| !name.ends_with(".tmp")), "a finished run leaves no temporary files");
+
+        // a second run writes other content and is dropped before `finalize`, as when a mod fails
+        let mut writer = KFCWriter::new_incremental_with_options(
+            directory.path(), NAME, &reference, TypeRegistry::default(),
+            KFCWriteOptions { overwrite_containers: true, max_container_size: 4096, ..Default::default() },
+        ).unwrap();
+        for index in 0..2 {
+            let bytes = vec![index as u8 + 100; 4096];
+            writer.write_content(&ContentHash::from_data(&bytes), &bytes).unwrap();
+        }
+        assert!(snapshot(directory.path()).iter().any(|(name, _)| name.ends_with(".tmp")), "new containers are written beside the old ones");
+        drop(writer);
+
+        assert_eq!(snapshot(directory.path()), before);
     }
 
     #[test]

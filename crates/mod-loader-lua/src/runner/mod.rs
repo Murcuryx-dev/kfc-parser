@@ -12,6 +12,13 @@ pub struct LuaModRunner {
     state: Rc<RunnerState>,
 }
 
+/// A mod's own code failed while it ran.
+#[derive(Debug)]
+pub struct ModRunError {
+    pub mod_id: String,
+    pub error: mlua::Error,
+}
+
 impl LuaModRunner {
 
     pub fn new(
@@ -28,7 +35,7 @@ impl LuaModRunner {
         })
     }
 
-    pub fn run(&self) -> mlua::Result<()> {
+    pub fn run(&self) -> Result<(), ModRunError> {
         let app_state = self.lua.app_data_ref::<AppState>().unwrap();
 
         for r#mod in self.state.mods().values() {
@@ -51,7 +58,10 @@ impl LuaModRunner {
             self.state.require(
                 &format!("mods.{}", r#mod.info().id),
                 &self.lua
-            )?;
+            ).map_err(|error| ModRunError {
+                mod_id: r#mod.info().id.clone(),
+                error,
+            })?;
         }
 
         Ok(())

@@ -319,7 +319,7 @@ fn run(
         }
     };
 
-    mod_loader::lua::run(
+    let result = mod_loader::lua::run(
         &mod_registry,
         RunArgs {
             file_name,
@@ -332,6 +332,11 @@ fn run(
             },
         },
     )?;
+
+    // the mods were not applied: say why and what the game files are now, and fail
+    if let Some(failure) = result.failure {
+        return Err(failure.message().into());
+    }
 
     Ok(())
 }

@@ -41,6 +41,54 @@ pub struct RunArgs {
 #[derive(Debug, Clone, Default)]
 pub struct RunResult {
     pub dlls: Vec<PathBuf>,
+    /// Set when the mods could not be applied. The game can still be started;
+    /// the failure says with which data.
+    pub failure: Option<RunFailure>,
+}
+
+/// Why a run did not apply the mods, and what the game files are left as.
+#[derive(Debug, Clone)]
+pub struct RunFailure {
+    /// The mod that failed, if a mod's own code failed.
+    pub mod_id: Option<String>,
+    /// What went wrong.
+    pub error: String,
+    /// The state the game files were left in.
+    pub state: GameFileState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameFileState {
+    /// Nothing was written: the files are as the last successful run left them.
+    Unchanged,
+    /// Writing failed part-way and the original index was put back: no mods are applied.
+    Unmodded,
+    /// Writing failed part-way and the original index could not be put back.
+    Broken,
+}
+
+impl RunFailure {
+
+    /// A message for the person starting the game.
+    pub fn message(&self) -> String {
+        let what = match &self.mod_id {
+            Some(id) => format!("The mod '{id}' failed:"),
+            None => "Applying the mods failed:".to_string(),
+        };
+        let state = match self.state {
+            GameFileState::Unchanged =>
+                "Nothing was changed. The game starts with the mods as they were applied the last time it worked. \
+                Fix or remove the mod to apply your mods again.",
+            GameFileState::Unmodded =>
+                "The game files were put back to the original ones. The game starts WITHOUT mods.",
+            GameFileState::Broken =>
+                "The original game files could not be put back. The game may not start. \
+                Verify the game files in Steam.",
+        };
+
+        format!("{what}\n\n{}\n\n{state}", self.error)
+    }
+
 }
 
 pub fn run(
@@ -48,6 +96,8 @@ pub fn run(
     mut args: RunArgs,
 ) -> anyhow::Result<RunResult> {
     info!("Running lua with options: {:?}", args);
+
+    let kfc_path = env.game_dir().join(format!("{}.kfc", args.file_name));
 
     // check cache if files have changed
 
@@ -102,7 +152,29 @@ pub fn run(
 
     // TODO: move this somewhere else, maybe to the GameContext?
 
-    runner.run()?;
+    // A mod that fails stops the run before anything is written: new containers go to
+    // temporary files (removed when the writer is dropped) and resources are only
+    // written below. The files of the last successful run stay as they are, and the
+    // cache is not updated, so the next start tries again.
+
+    if let Err(e) = runner.run() {
+        let failure = RunFailure {
+            mod_id: Some(e.mod_id),
+            error: e.error.to_string(),
+            state: GameFileState::Unchanged,
+        };
+
+        crate::log::error!(
+            mod_id = failure.mod_id,
+            error = failure.error,
+            "A mod failed, no patches were applied"
+        );
+
+        return Ok(RunResult {
+            dlls: Vec::new(),
+            failure: Some(failure),
+        });
+    }
 
     // how many values the loader keeps for the mods (each used to be an mlua reference, of which there can be 1,000,000)
     info!("Lua values kept by the loader: {}", crate::lua::held_slots_used());
@@ -111,6 +183,12 @@ pub fn run(
 
     if app_state.has_feature(AppFeatures::PATCH) {
         info!("Applying patches...");
+
+        // From here the resource data file is written in place, so a failure can leave
+        // it out of step with the index. In that case the original index is put back:
+        // it only refers to original data, which is never written.
+
+        let applied = (|| -> anyhow::Result<usize> {
 
         let mut buf = Vec::new();
         let mut writer = app_state.take_writer();
@@ -153,7 +231,35 @@ pub fn run(
 
         writer.finalize()?;
 
-        info!("Applied {} patches", applied_resources);
+        Ok(applied_resources)
+        })();
+
+        match applied {
+            Ok(applied_resources) => info!("Applied {} patches", applied_resources),
+            Err(e) => {
+                let state = match crate::load::restore_backup(&kfc_path) {
+                    Ok(()) => GameFileState::Unmodded,
+                    Err(()) => GameFileState::Broken,
+                };
+                let failure = RunFailure {
+                    mod_id: None,
+                    error: e.to_string(),
+                    state,
+                };
+
+                crate::log::error!(
+                    error = failure.error,
+                    state = ?failure.state,
+                    "Applying the patches failed"
+                );
+
+                // the cache is not updated, so the next start tries again
+                return Ok(RunResult {
+                    dlls: Vec::new(),
+                    failure: Some(failure),
+                });
+            }
+        }
     }
 
     // create a new cache file
@@ -177,6 +283,7 @@ pub fn run(
             .into_iter()
             .map(|path| path.into_std_path_buf())
             .collect::<Vec<_>>(),
+        failure: None,
     })
 }
 
