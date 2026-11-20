@@ -1,15 +1,14 @@
 use std::fs;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 fn main() -> std::io::Result<()> {
     generate_definitions_file()?;
 
-    // does not change unless definitions change, so this may need to be changed in the future
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-    println!("cargo:rustc-env=BUILD_ID={now}");
+    // The id of this build of the loader: a cache written by another build is not
+    // trusted. It is a fingerprint of the loader's source and not the time of the
+    // build, so that building the same source again gives the same files.
+    println!("cargo:rustc-env=BUILD_ID={:016x}", source_fingerprint()?);
 
     Ok(())
 }
@@ -75,5 +74,68 @@ fn collect_lua_files(
             out.push(p);
         }
     }
+    Ok(())
+}
+
+/// A fingerprint of every source file of the workspace's crates and of the lock file.
+/// Line endings do not count, so a checkout on Windows gives the same value.
+fn source_fingerprint() -> std::io::Result<u64> {
+    let crates_dir = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap())
+        .parent()
+        .expect("the crate is inside the crates directory")
+        .to_path_buf();
+    let lock_file = crates_dir.parent()
+        .expect("the crates directory is inside the workspace")
+        .join("Cargo.lock");
+
+    println!("cargo:rerun-if-changed={}", crates_dir.display());
+    println!("cargo:rerun-if-changed={}", lock_file.display());
+
+    let mut files = Vec::new();
+
+    collect_source_files(&crates_dir, &mut files)?;
+    files.sort();
+
+    if lock_file.is_file() {
+        files.push(lock_file);
+    }
+
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut add = |bytes: &[u8]| {
+        for byte in bytes {
+            if *byte != b'\r' {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    };
+
+    for file in files {
+        let name = file.strip_prefix(&crates_dir).unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        add(name.as_bytes());
+        add(&fs::read(&file)?);
+    }
+
+    Ok(hash)
+}
+
+fn collect_source_files(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| name != "target") {
+                collect_source_files(&path, files)?;
+            }
+        } else if path.extension().is_some_and(|ext| ext == "rs" || ext == "lua" || ext == "toml" || ext == "def") {
+            files.push(path);
+        }
+    }
+
     Ok(())
 }
