@@ -57,6 +57,9 @@ tracing-appender = "0.2.3"
 # Unwinding, so that an internal error of the loader can be caught and reported
 # while the game still starts (see `mod_loader_lua::run`).
 panic = "unwind"
+# No symbol table in the files: its order changes from build to build and it holds
+# paths of the machine the build was made on.
+strip = true
 # codegen-units = 1
 # lto = true
 # opt-level = 3
