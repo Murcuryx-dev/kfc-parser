@@ -52,6 +52,18 @@ pub enum Commands {
         force: bool,
     },
 
+    /// Run everything a game start runs (patch, and export if eml.json enables it)
+    /// without writing any game file: shows whether the mods would load
+    Check {
+        /// Game directory (should contain enshrouded.kfc and enshrouded._XXX.dat files)
+        #[arg(short, long)]
+        game_directory: PathBuf,
+
+        /// File name override (defaults to `enshrouded` and `enshrouded_server`)
+        #[arg(long)]
+        file_name: Option<String>,
+    },
+
     /// Restore the original enshrouded files
     Restore {
         /// Game directory (should contain enshrouded.kfc.bak)

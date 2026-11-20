@@ -11,7 +11,7 @@ pub use cast::*;
 pub use args::*;
 pub use error::*;
 pub use held::Held;
-pub use held::slots_used as held_slots_used;
+pub use held::{live as held_live, slots_used as held_slots_used};
 
 pub type LuaValue = mlua::Value;
 

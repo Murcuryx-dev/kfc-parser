@@ -55,6 +55,9 @@ impl LuaModRunner {
                 "Running mod",
             );
 
+            let started = std::time::Instant::now();
+            let values_before = crate::lua::held_live();
+
             self.state.require(
                 &format!("mods.{}", r#mod.info().id),
                 &self.lua
@@ -62,6 +65,14 @@ impl LuaModRunner {
                 mod_id: r#mod.info().id.clone(),
                 error,
             })?;
+
+            // what this mod cost: time, and Lua values the loader now keeps for it
+            info!(
+                mod_id = r#mod.info().id,
+                seconds = format!("{:.2}", started.elapsed().as_secs_f64()),
+                values_kept = crate::lua::held_live() - values_before,
+                "Mod finished",
+            );
         }
 
         Ok(())

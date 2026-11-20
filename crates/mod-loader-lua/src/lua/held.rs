@@ -23,6 +23,8 @@ const SWEEP_AT: usize = 4096;
 thread_local! {
     static STORE: RefCell<Option<Table>> = const { RefCell::new(None) };
     static NEXT: Cell<i64> = const { Cell::new(1) };
+    /// Values in the store right now.
+    static LIVE: Cell<i64> = const { Cell::new(0) };
     /// Freed slots whose old value is still in the store.
     static FREED: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
     /// Freed slots already set to nil.
@@ -35,6 +37,7 @@ pub fn init(lua: &mlua::Lua) -> mlua::Result<()> {
 
     STORE.with(|s| s.replace(Some(table)));
     NEXT.with(|n| n.set(1));
+    LIVE.with(|n| n.set(0));
     FREED.with(|f| f.borrow_mut().clear());
     CLEARED.with(|f| f.borrow_mut().clear());
 
@@ -51,6 +54,11 @@ pub fn shutdown() {
 /// How many slots the store has handed out so far (for logging).
 pub fn slots_used() -> i64 {
     NEXT.with(|n| n.get()) - 1
+}
+
+/// How many values the store holds right now.
+pub fn live() -> i64 {
+    LIVE.with(|n| n.get())
 }
 
 fn with_store<R>(f: impl FnOnce(&Table) -> R) -> R {
@@ -113,6 +121,8 @@ impl Held {
                 with_store(|store| store.raw_set(id, other))
                     .expect("failed to store a held Lua value");
 
+                LIVE.with(|n| n.set(n.get() + 1));
+
                 Held::Slot(id)
             }
         }
@@ -155,6 +165,7 @@ impl Drop for Held {
             // Only recorded here: this can run inside Lua's collector (a wrapper being finalised),
             // where the store must not be written. The slot is reused or cleared later.
             let id = *id;
+            let _ = LIVE.try_with(|n| n.set(n.get() - 1));
             let _ = FREED.try_with(|f| {
                 if let Ok(mut f) = f.try_borrow_mut() {
                     f.push(id);

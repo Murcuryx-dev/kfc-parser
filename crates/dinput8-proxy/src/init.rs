@@ -21,7 +21,13 @@ pub fn init(config: Config) {
                     error = %error,
                     "Error loading mod environment"
                 );
-                panic!("Error loading mod environment: {error}");
+                // The mods folder could not be read. Nothing is patched; the game starts
+                // with the files as the last successful run left them.
+                crate::show_message(
+                    "Enshrouded Mod Loader",
+                    &format!("The mods could not be loaded:\n\n{error}\n\nNothing was changed. The game starts with the mods as they were applied the last time it worked."),
+                );
+                return;
             }
 
             let mut report = String::from("Errors loading some mods:");
@@ -47,7 +53,13 @@ pub fn init(config: Config) {
                 report = %report,
                 "Error loading mod environment"
             );
-            panic!("{report}");
+            // A mod that cannot be read stops the others from being applied this
+            // start, but not the game.
+            crate::show_message(
+                "Enshrouded Mod Loader",
+                &format!("{report}\n\nNothing was changed. The game starts with the mods as they were applied the last time it worked. Fix or remove the mods named above to apply your mods again."),
+            );
+            return;
         }
     };
 

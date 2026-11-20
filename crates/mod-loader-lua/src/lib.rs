@@ -29,6 +29,9 @@ pub struct RunOptions {
     pub runtime: bool,
     /// If None, it will use the default export directory (`<game_dir>/export`).
     pub export_dir: Option<PathBuf>,
+    /// If true, the mods run and every changed resource is serialized, but no game
+    /// file and no cache file is written.
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +99,13 @@ pub fn run(
     mut args: RunArgs,
 ) -> anyhow::Result<RunResult> {
     info!("Running lua with options: {:?}", args);
+
+    let dry_run = args.options.dry_run;
+
+    if dry_run {
+        // a check always runs the mods, whatever the cache says
+        args.options.skip_cache = true;
+    }
 
     let kfc_path = env.game_dir().join(format!("{}.kfc", args.file_name));
 
@@ -177,7 +187,7 @@ pub fn run(
     }
 
     // how many values the loader keeps for the mods (each used to be an mlua reference, of which there can be 1,000,000)
-    info!("Lua values kept by the loader: {}", crate::lua::held_slots_used());
+    info!("Lua values kept by the loader: {} (store size {})", crate::lua::held_live(), crate::lua::held_slots_used());
 
     let app_state = runner.lua.app_data_ref::<AppState>().unwrap();
 
@@ -224,22 +234,35 @@ pub fn run(
                     );
                 }
 
-                writer.write_resource(resource_id, &buf)?;
+                if !dry_run {
+                    writer.write_resource(resource_id, &buf)?;
+                }
                 applied_resources += 1;
             }
         }
 
-        writer.finalize()?;
+        if dry_run {
+            // dropping the writer removes the temporary containers
+            drop(writer);
+        } else {
+            writer.finalize()?;
+        }
 
         Ok(applied_resources)
         })();
 
         match applied {
+            Ok(applied_resources) if dry_run => info!("Check passed: {} patches would be applied, nothing was written", applied_resources),
             Ok(applied_resources) => info!("Applied {} patches", applied_resources),
             Err(e) => {
-                let state = match crate::load::restore_backup(&kfc_path) {
-                    Ok(()) => GameFileState::Unmodded,
-                    Err(()) => GameFileState::Broken,
+                let state = if dry_run {
+                    // nothing was written
+                    GameFileState::Unchanged
+                } else {
+                    match crate::load::restore_backup(&kfc_path) {
+                        Ok(()) => GameFileState::Unmodded,
+                        Err(()) => GameFileState::Broken,
+                    }
                 };
                 let failure = RunFailure {
                     mod_id: None,
@@ -264,7 +287,9 @@ pub fn run(
 
     // create a new cache file
 
-    if app_state.has_feature(AppFeatures::PATCH) {
+    if dry_run {
+        // a check leaves the cache as it is
+    } else if app_state.has_feature(AppFeatures::PATCH) {
         let mut new_cache = FileStateCache::default();
 
         new_cache.track_game_files(env.game_dir());

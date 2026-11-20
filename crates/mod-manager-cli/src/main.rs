@@ -41,8 +41,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             export,
             runtime,
 
-            export_directory
+            export_directory,
+            false,
         ),
+        Commands::Check {
+            game_directory,
+            file_name,
+        } => {
+            // the game start exports only when eml.json says so
+            let export = std::fs::read_to_string(game_directory.join("eml.json"))
+                .ok()
+                .and_then(|json| serde_json::from_str::<mod_loader::Config>(&json).ok())
+                .is_some_and(|config| config.use_export_flag);
+
+            run(
+                game_directory,
+                file_name,
+                true,
+
+                true,
+                export,
+                false,
+
+                None,
+                true,
+            )
+        }
         Commands::Restore {
             game_directory,
             file_name
@@ -271,6 +295,7 @@ fn run(
     export: bool,
     _runtime: bool,
     export_directory: Option<PathBuf>,
+    dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let export_directory = match export_directory {
         Some(dir) => dir,
@@ -328,6 +353,7 @@ fn run(
                 patch,
                 export,
                 export_dir: Some(export_directory),
+                dry_run,
                 ..Default::default()
             },
         },
