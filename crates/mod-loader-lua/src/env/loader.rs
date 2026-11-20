@@ -1,6 +1,4 @@
-use camino::Utf8PathBuf;
 use mod_loader::Mod;
-use uuid::Uuid;
 
 use crate::{env::{AppFeatures, AppState, util::{add_function, add_function_with_mod}}, lua::{FunctionArgs, LuaError}};
 
@@ -67,27 +65,14 @@ fn lua_register_dll(
     if let Some(path) = fs.absolute_path(&path)? {
         app_state.register_dll(path);
     } else {
-        let path = Utf8PathBuf::from(path);
-        let path = loop {
-            let uuid = Uuid::new_v4().to_string();
-            let file_name = path.file_name().unwrap_or(uuid.as_str());
-            let tmp_path = std::env::temp_dir()
-                .join(format!("{}_{}.dll", r#mod.info().id, file_name));
-            let utf8_path = Utf8PathBuf::try_from(tmp_path.clone())
-                .map_err(|e| LuaError::generic(format!("failed to convert temp path to UTF-8: {e}")))?;
-
-            if !utf8_path.exists() {
-                break utf8_path;
-            }
-        };
-
-        let mut reader = fs.read_file(&path)?;
-        let writer = std::fs::File::create(&path)
-            .map_err(|e| LuaError::generic(format!("failed to create temp dll: {e}")))?;
-        let mut writer = std::io::BufWriter::new(writer);
-
-        std::io::copy(&mut reader, &mut writer)
-            .map_err(|e| LuaError::generic(format!("failed to write temp dll: {e}")))?;
+        // A DLL inside a packed mod would have to be copied out to be loaded. DLLs
+        // registered by mods are not loaded in this version, so nothing is copied:
+        // the loader writes no file outside the game folder.
+        tracing::warn!(
+            mod_id = r#mod.info().id,
+            path = path,
+            "register_dll: DLLs of packed mods are not extracted, ignored",
+        );
     }
 
     Ok(())
