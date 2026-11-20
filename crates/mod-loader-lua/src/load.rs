@@ -419,22 +419,14 @@ pub fn export_lua_definitions(
 mod tests {
     use super::*;
 
-    struct TempDir(PathBuf);
+    /// A temporary directory as the crate's UTF-8 path type; removed when dropped.
+    struct TempDir(tempfile::TempDir, PathBuf);
 
     impl TempDir {
-        fn new(name: &str) -> Self {
-            let dir = PathBuf::try_from(std::env::temp_dir())
-                .unwrap()
-                .join(format!("eml-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let path = PathBuf::try_from(dir.path().to_path_buf()).unwrap();
+            Self(dir, path)
         }
     }
 
@@ -444,7 +436,7 @@ mod tests {
         const VERSION_LOCATION: u32 = 16;
 
         let mut data = Vec::new();
-        data.extend_from_slice(b"KFC3");
+        data.extend_from_slice(b"KFC4");
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&12u32.to_le_bytes());
         data.extend_from_slice(&[0; 4]);
@@ -462,9 +454,9 @@ mod tests {
 
     #[test]
     fn create_backup_keeps_backup_with_equal_version() {
-        let dir = TempDir::new("backup-equal");
-        let kfc_path = dir.0.join("test.kfc");
-        let bak_path = dir.0.join("test.kfc.bak");
+        let dir = TempDir::new();
+        let kfc_path = dir.1.join("test.kfc");
+        let bak_path = dir.1.join("test.kfc.bak");
         write_kfc(&kfc_path, "1.0");
         write_kfc(&bak_path, "1.0");
         let backup = std::fs::read(&bak_path).unwrap();
@@ -480,9 +472,9 @@ mod tests {
 
     #[test]
     fn create_backup_replaces_backup_with_different_version() {
-        let dir = TempDir::new("backup-different");
-        let kfc_path = dir.0.join("test.kfc");
-        let bak_path = dir.0.join("test.kfc.bak");
+        let dir = TempDir::new();
+        let kfc_path = dir.1.join("test.kfc");
+        let bak_path = dir.1.join("test.kfc.bak");
         write_kfc(&kfc_path, "2.0");
         write_kfc(&bak_path, "1.0");
 
@@ -492,9 +484,9 @@ mod tests {
 
     #[test]
     fn create_backup_replaces_unreadable_backup() {
-        let dir = TempDir::new("backup-corrupt");
-        let kfc_path = dir.0.join("test.kfc");
-        let bak_path = dir.0.join("test.kfc.bak");
+        let dir = TempDir::new();
+        let kfc_path = dir.1.join("test.kfc");
+        let bak_path = dir.1.join("test.kfc.bak");
         write_kfc(&kfc_path, "2.0");
         std::fs::write(&bak_path, b"corrupt").unwrap();
 
@@ -504,9 +496,9 @@ mod tests {
 
     #[test]
     fn create_backup_keeps_backup_if_kfc_is_unreadable() {
-        let dir = TempDir::new("backup-unreadable");
-        let kfc_path = dir.0.join("test.kfc");
-        let bak_path = dir.0.join("test.kfc.bak");
+        let dir = TempDir::new();
+        let kfc_path = dir.1.join("test.kfc");
+        let bak_path = dir.1.join("test.kfc.bak");
         std::fs::write(&kfc_path, b"corrupt").unwrap();
         write_kfc(&bak_path, "1.0");
 
@@ -516,9 +508,9 @@ mod tests {
 
     #[test]
     fn create_backup_keeps_backup_if_kfc_is_missing() {
-        let dir = TempDir::new("backup-missing");
-        let kfc_path = dir.0.join("test.kfc");
-        let bak_path = dir.0.join("test.kfc.bak");
+        let dir = TempDir::new();
+        let kfc_path = dir.1.join("test.kfc");
+        let bak_path = dir.1.join("test.kfc.bak");
         write_kfc(&bak_path, "1.0");
 
         assert_eq!(create_backup(&kfc_path), Err(()));

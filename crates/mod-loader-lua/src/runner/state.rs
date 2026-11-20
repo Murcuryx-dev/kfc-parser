@@ -182,8 +182,8 @@ mod tests {
 
     #[test]
     fn mods_are_ordered_by_id() {
-        let game_dir = std::env::temp_dir()
-            .join(format!("eml-runner-state-test-{}", std::process::id()));
+        let temp_dir = tempfile::tempdir().unwrap();
+        let game_dir = temp_dir.path();
         let mods_dir = game_dir.join("mods");
 
         for id in ["c", "a", "b"] {
@@ -196,11 +196,7 @@ mod tests {
             ).unwrap();
         }
 
-        let env = ModEnvironment::load(game_dir.to_str().unwrap());
-
-        std::fs::remove_dir_all(&game_dir).unwrap();
-
-        let env = env.unwrap();
+        let env = ModEnvironment::load(game_dir.to_str().unwrap()).unwrap();
         let lua = mlua::Lua::new();
         let state = RunnerState::default();
 
