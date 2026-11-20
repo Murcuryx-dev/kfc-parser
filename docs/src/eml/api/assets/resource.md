@@ -47,3 +47,33 @@ As described in the documentation comment in the definition file, this function 
 If the resulting resource is not unique (i.e., there is already a resource with the same guid, type and part index), it will raise an error.
 
 Check `AssetManager` in the `base.lua` definition file for more information about these functions.
+
+## Arrays
+
+An array of a resource is used like a Lua list. `#`, `ipairs`, `pairs` and the functions
+`table.insert`, `table.remove`, `table.clear`, `table.unpack`, `table.concat`, `table.sort`
+and `table.move` work on it. The end of an array can also be changed the way a Lua list is:
+
+```lua
+local events = resource.data.events
+
+events[#events + 1] = events[1]  -- append a copy of the first element
+events[#events] = nil            -- remove the last element
+```
+
+Arrays of a fixed size cannot grow or shrink.
+
+An array of plain numbers (or of structs that only hold numbers) can be filled from a
+buffer in one step, for example from a file of the mod. The buffer's unread bytes are
+taken as the elements in their binary layout:
+
+```lua
+resource.data.samples = io.read("samples.bin")
+```
+
+## New resources
+
+`game.assets.create_resource(value, type)` gives the new resource an id of its own. The id
+is derived from the id of the mod and from how many resources the mod has created so far,
+so the resource has the same id every time the game starts as long as the mod creates its
+resources in the same order.

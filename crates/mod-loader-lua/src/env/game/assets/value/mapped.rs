@@ -465,7 +465,29 @@ impl MappedArrayValue {
         value: &LuaValue,
         lua: &mlua::Lua,
     ) -> mlua::Result<()> {
-        let index = self.check_range(index, 1, self.len())?;
+        // the two ways a Lua list grows and shrinks at its end:
+        // `a[#a + 1] = v` appends, `a[#a] = nil` removes the last element
+        let len = self.len();
+        let is_static = self.r#type().primitive_type == PrimitiveType::StaticArray;
+
+        if !is_static && index == len + 1 && !value.is_nil() {
+            let value = validate_and_clone_lua_value(value, self.element_type(), lua)
+                .map_err(LuaError::external)?;
+
+            self.values.borrow_mut().push(MappedArrayValueEntry::Value(Held::new(value)));
+            self.dirty.set(true);
+
+            return Ok(());
+        }
+
+        if !is_static && index == len && len > 0 && value.is_nil() {
+            self.values.borrow_mut().pop();
+            self.dirty.set(true);
+
+            return Ok(());
+        }
+
+        let index = self.check_range(index, 1, len)?;
 
         let value = validate_and_clone_lua_value(value, self.element_type(), lua)
             .map_err(LuaError::external)?;
