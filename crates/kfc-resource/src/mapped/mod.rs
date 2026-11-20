@@ -1041,6 +1041,29 @@ where
         }
     }
 
+    /// Creates an array over `length` elements that lie back to back in `data`,
+    /// starting at `offset`, each in the element type's own binary layout.
+    ///
+    /// Returns `None` if `data` is too short. The element type must not contain
+    /// blob types (arrays, strings, optionals, variants): those refer to other
+    /// places of a resource and cannot be read from a plain run of elements.
+    pub fn from_elements(
+        r#type: TypeHandle<T>,
+        data: D,
+        offset: usize,
+        length: usize,
+    ) -> Option<Self> {
+        let array = Self::new(r#type, data, offset, length);
+        let size = (array.element_type.size as usize).checked_mul(length)?;
+        let end = offset.checked_add(size)?;
+
+        if end > array.data.borrow().len() {
+            return None;
+        }
+
+        Some(array)
+    }
+
     #[inline]
     pub fn r#type(&self) -> &TypeHandle<T> {
         &self.r#type

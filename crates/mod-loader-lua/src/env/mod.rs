@@ -18,7 +18,7 @@ pub use app_state::*;
 
 #[allow(unused_imports)]
 use game::{Content, Resource, Type, value};
-use buffer::Buffer;
+pub(crate) use buffer::Buffer;
 
 pub fn register(
     lua: &mlua::Lua,

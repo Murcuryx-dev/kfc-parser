@@ -4,7 +4,7 @@ use kfc::{guid::{ContentHash, Guid}, reflection::{LookupKey, PrimitiveType}, res
 use mlua::AnyUserData;
 use thiserror::Error;
 
-use crate::{alias::TypeHandle, env::{game::{Content, Resource}, value::{mapped::{MappedArrayValue, MappedStructValue, MappedVariantValue}, name_of, simple::{ArrayValue, StructValue, VariantValue}, util::TreePath}}, lua::{CastLuaExt, LuaValue}};
+use crate::{alias::{MappedArray, TypeHandle}, env::{Buffer, game::{Content, Resource}, value::{mapped::{MappedArrayValue, MappedStructValue, MappedVariantValue}, name_of, simple::{ArrayValue, StructValue, VariantValue}, util::TreePath}}, lua::{CastLuaExt, LuaValue}};
 
 #[derive(Debug, Error)]
 #[error("at {path}: {kind}")]
@@ -350,6 +350,53 @@ impl Validator {
         self.process_array_like(value, r#type)
     }
 
+    /// An array given as a buffer: the buffer's unread bytes are the elements, back
+    /// to back, in the element type's binary layout. The elements stay native data,
+    /// so a large array (animation data, vertex data) costs neither a Lua table per
+    /// element nor a conversion of each one.
+    fn process_array_from_buffer(
+        &mut self,
+        ud: &AnyUserData,
+        r#type: &TypeHandle,
+    ) -> Result<LuaValue, LuaValidationErrorKind> {
+        let inner_type = r#type.inner_type()
+            .expect("array type must have an inner type");
+
+        if !is_plain_data(&inner_type) {
+            return Err(LuaValidationErrorKind::IncompatibleType {
+                expected: format!("{} (its elements hold arrays, strings, optionals, variants or references, which a buffer cannot provide)", name_of(r#type)),
+                found: "buffer".to_string(),
+            });
+        }
+
+        let buffer = ud.borrow::<Buffer>()?;
+        let bytes = buffer.data().map_err(mlua::Error::external)?;
+        let element_size = inner_type.size as usize;
+
+        if element_size == 0 || bytes.len() % element_size != 0 {
+            return Err(LuaValidationErrorKind::IncompatibleType {
+                expected: format!("a buffer whose length is a multiple of {element_size} bytes (one {})", name_of(&inner_type)),
+                found: format!("buffer of {} bytes", bytes.len()),
+            });
+        }
+
+        let length = bytes.len() / element_size;
+
+        if r#type.primitive_type == PrimitiveType::StaticArray && length != r#type.field_count as usize {
+            return Err(LuaValidationErrorKind::IncompatibleType {
+                expected: format!("array of length {}", r#type.field_count),
+                found: format!("buffer holding {length} elements"),
+            });
+        }
+
+        let data: std::rc::Rc<[u8]> = std::rc::Rc::from(bytes);
+        let array = MappedArray::from_elements(r#type.clone(), data, 0, length)
+            .expect("the buffer holds a whole number of elements");
+        let ud = self.lua.create_userdata(MappedArrayValue::new(array))?;
+
+        Ok(LuaValue::UserData(ud))
+    }
+
     #[inline]
     fn process_blob_array(
         &mut self,
@@ -535,6 +582,7 @@ impl Validator {
 
                 Ok(LuaValue::UserData(ud))
             },
+            LuaValue::UserData(ud) if ud.is::<Buffer>() => self.process_array_from_buffer(ud, r#type),
             LuaValue::UserData(ud) => self.try_clone_array_ud_lua(ud, r#type),
             _ => Err(LuaValidationErrorKind::IncompatibleType {
                 expected: name_of(r#type),
@@ -700,6 +748,28 @@ impl Validator {
         }
     }
 
+}
+
+/// Whether a value of this type is one fixed run of bytes with nothing stored elsewhere.
+fn is_plain_data(r#type: &TypeHandle) -> bool {
+    match r#type.primitive_type {
+        PrimitiveType::Bool
+        | PrimitiveType::UInt8 | PrimitiveType::SInt8
+        | PrimitiveType::UInt16 | PrimitiveType::SInt16
+        | PrimitiveType::UInt32 | PrimitiveType::SInt32
+        | PrimitiveType::UInt64 | PrimitiveType::SInt64
+        | PrimitiveType::Float32 | PrimitiveType::Float64
+        | PrimitiveType::Enum
+        | PrimitiveType::Bitmask8 | PrimitiveType::Bitmask16
+        | PrimitiveType::Bitmask32 | PrimitiveType::Bitmask64 => true,
+        PrimitiveType::Typedef | PrimitiveType::StaticArray => r#type.inner_type()
+            .is_some_and(|inner| is_plain_data(&inner)),
+        PrimitiveType::Struct => r#type.iter_fields().all(|field| {
+            r#type.get_field_type(&field.name)
+                .is_some_and(|field_type| is_plain_data(&field_type))
+        }),
+        _ => false,
+    }
 }
 
 pub fn try_clone_lua_value(
