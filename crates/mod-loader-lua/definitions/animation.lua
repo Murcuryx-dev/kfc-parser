@@ -8,7 +8,7 @@ local AnimationHelper = {}
 --- @class AnimationImportOptions
 --- @field id Guid? -- The id of the new clip. Without it the loader gives one.
 --- @field same_length boolean? -- Fail unless the file has as many frames as the template.
---- @field events boolean? -- Copy the template's events (footsteps, sounds) for the new clip.
+--- @field events (boolean|Guid|Resource)? -- `true`: copy the template's events (footsteps, sounds) for the new clip. The id of another clip, or its `keen::AnimationSequenceContainer`: copy that clip's events.
 --- @field root_motion string? -- A file with the movement of the clip: one "x y z" per line, in metres, one line per frame and one more.
 --- @field root_motion_template (Guid|Resource)? -- A `keen::RootMotionAnimation` of the game to copy the rest of the track from. Needed with `root_motion`.
 

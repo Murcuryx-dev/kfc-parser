@@ -25,7 +25,7 @@ joints) is refused.
 |---|---|
 | `id` | The id of the new clip. Without it the loader gives one, the same at every start. |
 | `same_length` | `true`: fail unless the file has as many frames as the template. |
-| `events` | `true`: the template's events (footsteps, sounds), a `keen::AnimationSequenceContainer` with the template's id, are copied for the new clip. |
+| `events` | `true`: the template's events (footsteps, sounds), a `keen::AnimationSequenceContainer` with the template's id, are copied for the new clip. The id of another clip of the game: that clip's events are copied, which fails if it has none. |
 | `root_motion` | A text file with the movement of the clip (see below). Makes a `keen::RootMotionAnimation` with the id of the clip. |
 | `root_motion_template` | A movement track of the game, as a resource or its id. Everything the text file does not give is copied from it. Needed with `root_motion`. |
 

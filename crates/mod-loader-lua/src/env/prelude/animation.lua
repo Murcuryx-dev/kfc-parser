@@ -93,7 +93,8 @@ end
 --- options (all optional):
 ---   id                    the id of the new clip; without it the loader gives one
 ---   same_length           true: fail unless the file has as many frames as the template
----   events                true: the template's events (footsteps, sounds) are copied for the new clip
+---   events                true: the template's events (footsteps, sounds) are copied for the new clip;
+---                         the id of another clip (or its events resource): that clip's events are copied
 ---   root_motion           a file with the movement of the clip, one "x y z" per line
 ---   root_motion_template  a movement track of the game to copy the rest from (needed with root_motion)
 ---
@@ -136,12 +137,22 @@ local function import(file, template, options)
 
     local result = { id = id, resource = resource, frames = clip.frameCount, joints = joints, events = false }
 
-    if options.events then
+    if options.events == true then
+        -- the template's own events, if it has any
         local events = game.assets.get_resource(source.guid, EVENTS)
         if events then
             game.assets.create_resource(events.data, EVENTS, id, 0)
             result.events = true
         end
+    elseif options.events then
+        -- the events of another clip of the game: a resource, or the id of the clip
+        local events = options.events
+        if type(events) == "string" then
+            events = game.assets.get_resource(events, EVENTS)
+            if not events then fail("the clip " .. options.events .. " has no events (" .. EVENTS .. ")") end
+        end
+        game.assets.create_resource(events.data, EVENTS, id, 0)
+        result.events = true
     end
 
     if options.root_motion then
