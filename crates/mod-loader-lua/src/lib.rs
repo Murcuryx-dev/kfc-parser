@@ -115,6 +115,7 @@ pub fn run(
         let current_cache = FileStateCache::read(env.cache_dir());
         let mut new_cache = FileStateCache::default();
 
+        new_cache.reuse_fingerprints(&current_cache);
         new_cache.track_game_files(env.game_dir());
         new_cache.track_mod_files(env.mods_dir());
 
@@ -198,12 +199,15 @@ pub fn run(
         // it out of step with the index. In that case the original index is put back:
         // it only refers to original data, which is never written.
 
-        let applied = (|| -> anyhow::Result<usize> {
+        let applied = (|| -> anyhow::Result<(usize, String)> {
 
         let mut buf = Vec::new();
         let mut writer = app_state.take_writer();
         let resources = app_state.get_cached_resources();
         let mut applied_resources = 0;
+        // one line per written resource: id, size and a fingerprint of its bytes.
+        // Two runs over the same mods must give the same list.
+        let mut listing = String::new();
 
         for resource in resources.iter() {
             let resource_id = &resource.resource_id;
@@ -237,6 +241,10 @@ pub fn run(
                 if !dry_run {
                     writer.write_resource(resource_id, &buf)?;
                 }
+                {
+                    use std::fmt::Write as _;
+                    let _ = writeln!(listing, "{resource_id} {} {:016x}", buf.len(), fingerprint(&buf));
+                }
                 applied_resources += 1;
             }
         }
@@ -248,12 +256,16 @@ pub fn run(
             writer.finalize()?;
         }
 
-        Ok(applied_resources)
+        Ok((applied_resources, listing))
         })();
 
         match applied {
-            Ok(applied_resources) if dry_run => info!("Check passed: {} patches would be applied, nothing was written", applied_resources),
-            Ok(applied_resources) => info!("Applied {} patches", applied_resources),
+            Ok((applied_resources, _)) if dry_run => info!("Check passed: {} patches would be applied, nothing was written", applied_resources),
+            Ok((applied_resources, listing)) => {
+                // best effort: the list is only there to compare runs
+                let _ = std::fs::write(env.cache_dir().join("applied_resources.txt"), listing);
+                info!("Applied {} patches", applied_resources);
+            },
             Err(e) => {
                 let state = if dry_run {
                     // nothing was written
@@ -292,6 +304,8 @@ pub fn run(
     } else if app_state.has_feature(AppFeatures::PATCH) {
         let mut new_cache = FileStateCache::default();
 
+        // mod files that have not changed since the last cache are not read again
+        new_cache.reuse_fingerprints(&FileStateCache::read(env.cache_dir()));
         new_cache.track_game_files(env.game_dir());
         new_cache.track_mod_files(env.mods_dir());
 
@@ -310,6 +324,18 @@ pub fn run(
             .collect::<Vec<_>>(),
         failure: None,
     })
+}
+
+/// FNV-1a, the same on every machine and in every run.
+fn fingerprint(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    hash
 }
 
 pub fn export_lua_definitions(

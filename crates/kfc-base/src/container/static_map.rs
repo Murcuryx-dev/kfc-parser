@@ -195,7 +195,14 @@ impl<K: Eq + Hash + Ord + StaticHash, V> StaticMapBuilder<K, V> {
         let mut buckets = vec![StaticMapBucket::default(); bucket_size];
 
         let mut entries = self.entries.into_iter().collect::<Vec<_>>();
-        entries.sort_by_key(|(k, _)| k.static_hash() % bucket_size as u32);
+        // by bucket, and by key within a bucket: the map the entries come from has no
+        // fixed order, and without the second key two builds of the same entries
+        // could lay them out differently
+        entries.sort_by(|(a, _), (b, _)| {
+            (a.static_hash() % bucket_size as u32)
+                .cmp(&(b.static_hash() % bucket_size as u32))
+                .then_with(|| a.cmp(b))
+        });
 
         let mut bucket_index = 0;
         let mut entry_index = 0;

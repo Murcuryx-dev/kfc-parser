@@ -16,8 +16,11 @@ use crate::{cache::FileStateCache, log::warn};
 // also what produces exports. Other mods contribute their manifest and Lua
 // sources: a patch mod can `require` those sources. Directories are not
 // entries. Mod files are fingerprinted by content, so a rewrite with the
-// same bytes does not invalidate the cache. Game .dat, .kfc, and .exe files
-// stay on mtime; they are large and are not rewritten every launch.
+// same bytes does not invalidate the cache. A file's content is only read
+// when its size or time differs from the run that last fingerprinted it
+// (`FileStateCache::reuse_fingerprints`), so a start does not read the whole
+// mods folder. Game .dat, .kfc, and .exe files stay on mtime; they are large
+// and are not rewritten every launch.
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -219,7 +222,7 @@ impl FileStateCache {
         &mut self,
         path: &Path,
     ) {
-        self.files.insert(path.to_path_buf(), content_hash(path));
+        self.track_by_content(path, content_hash);
     }
 
     #[cfg(test)]

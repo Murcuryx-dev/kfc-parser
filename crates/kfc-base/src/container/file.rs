@@ -207,6 +207,9 @@ impl KFCFile {
             })
             .collect::<Result<Vec<_>, KFCWriteError>>()?;
 
+        // the set above has no fixed order; the index must not depend on it
+        type_hashes.sort_by_key(|(hash, _)| *hash);
+
         let mut indices = Vec::with_capacity(self.resources.len());
 
         for (hash, info) in type_hashes.iter_mut() {

@@ -55,6 +55,8 @@ impl LuaModRunner {
                 "Running mod",
             );
 
+            app_state.set_running_mod(&r#mod.info().id);
+
             let started = std::time::Instant::now();
             let values_before = crate::lua::held_live();
 

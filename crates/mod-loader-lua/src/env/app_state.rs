@@ -23,6 +23,10 @@ pub struct AppState {
     new_contents: RefCell<HashMap<ContentHash, Vec<u8>>>,
     resources: RefCell<HashMap<ResourceId, Rc<ResourceInfo>>>,
     types: RefCell<HashMap<TypeIndex, LuaValue>>,
+
+    /// The mod being run, and how many resources it has asked a new id for.
+    /// New ids are derived from these, so they are the same in every run.
+    running_mod: RefCell<(String, u64)>,
 }
 
 pub struct AppConfig {
@@ -144,6 +148,7 @@ impl AppState {
             new_contents: RefCell::new(HashMap::new()),
             resources: RefCell::new(HashMap::new()),
             types: RefCell::new(HashMap::new()),
+            running_mod: RefCell::new((String::new(), 0)),
         })
     }
 
@@ -215,10 +220,16 @@ impl AppState {
     pub fn get_cached_resources(
         &self,
     ) -> Vec<Rc<ResourceInfo>> {
-        self.resources.borrow()
+        // in the order of their ids, so that two runs over the same mods write the
+        // same bytes (the map's own order changes from run to run)
+        let mut resources: Vec<_> = self.resources.borrow()
             .values()
             .cloned()
-            .collect()
+            .collect();
+
+        resources.sort_by_key(|resource| resource.resource_id);
+
+        resources
     }
 
     pub fn get_resource_info(
@@ -287,6 +298,11 @@ impl AppState {
         Ok(())
     }
 
+    /// Tells the state which mod runs now; new resource ids are counted per mod.
+    pub fn set_running_mod(&self, mod_id: &str) {
+        *self.running_mod.borrow_mut() = (mod_id.to_string(), 0);
+    }
+
     pub fn create_resource(
         &self,
         value: &LuaValue,
@@ -300,18 +316,28 @@ impl AppState {
         let resources = self.resources.borrow_mut();
         let mut guid: ResourceId;
 
-        loop {
-            let uuid = uuid::Uuid::new_v4().into_bytes();
+        // The id is derived from the mod and from how many ids it has asked for, not
+        // drawn at random: the same mods then give the same game files in every run,
+        // and a resource keeps its id from one start of the game to the next.
+        let (mod_id, number) = {
+            let mut running = self.running_mod.borrow_mut();
+            running.1 += 1;
+            (running.0.clone(), running.1)
+        };
+        let mut attempt = 0u32;
 
+        loop {
             guid = ResourceId::new(
-                uuid.into(),
+                derived_uuid(&mod_id, number, r#type.qualified_hash, attempt).into(),
                 r#type.qualified_hash,
                 0,
             );
 
-            if !resources.contains_key(&guid) {
+            if !resources.contains_key(&guid) && !self.ref_file.resources().contains_key(&guid) {
                 break;
             }
+
+            attempt += 1;
         }
 
         drop(resources);
@@ -500,4 +526,67 @@ impl ResourceInfo {
         }).map(|v| v.as_ref())
     }
 
+}
+
+/// The bytes of a version 4 shaped UUID that depends only on its inputs.
+fn derived_uuid(mod_id: &str, number: u64, type_hash: u32, attempt: u32) -> [u8; 16] {
+    fn fnv(seed: u64, parts: &[&[u8]]) -> u64 {
+        let mut hash = seed;
+
+        for part in parts {
+            for byte in *part {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            // a part's end counts, so ("ab", "c") and ("a", "bc") differ
+            hash ^= 0xff;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+
+        // spread the last bytes over the whole value
+        hash ^= hash >> 33;
+        hash = hash.wrapping_mul(0xff51afd7ed558ccd);
+        hash ^= hash >> 33;
+
+        hash
+    }
+
+    let parts: [&[u8]; 4] = [
+        mod_id.as_bytes(),
+        &number.to_le_bytes(),
+        &type_hash.to_le_bytes(),
+        &attempt.to_le_bytes(),
+    ];
+
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&fnv(0xcbf29ce484222325, &parts).to_le_bytes());
+    bytes[8..].copy_from_slice(&fnv(0x84222325cbf29ce4, &parts).to_le_bytes());
+
+    // mark it as a random-style UUID, like the ids it replaces
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derived_uuid;
+
+    #[test]
+    fn new_resource_ids_repeat_and_do_not_collide() {
+        assert_eq!(derived_uuid("a_mod", 1, 7, 0), derived_uuid("a_mod", 1, 7, 0));
+
+        let mut seen = std::collections::HashSet::new();
+
+        for mod_id in ["a_mod", "b_mod", "a_mo"] {
+            for number in 1..=2000u64 {
+                for attempt in 0..2u32 {
+                    assert!(seen.insert(derived_uuid(mod_id, number, 7, attempt)));
+                }
+            }
+        }
+
+        assert!(seen.insert(derived_uuid("a_mod", 1, 8, 0)));
+    }
 }
