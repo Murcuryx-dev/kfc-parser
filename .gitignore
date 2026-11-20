@@ -3,3 +3,8 @@
 .vscode/
 *.iml
 .cargo/
+
+# local tool settings: may hold approved commands with secrets in them
+.claude/
+.env
+.env.*
