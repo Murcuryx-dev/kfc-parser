@@ -548,7 +548,9 @@ extern "system" fn DllMain(
                         crate::enable_console();
                     }
 
-                    init::init(config);
+                    // An internal error outside the mod run itself (the run catches its
+                    // own) must not take the game down: the panic hook has shown it.
+                    let _ = std::panic::catch_unwind(|| init::init(config));
                 }
                 Err(e) => {
                     panic!("Failed to initialize dbghelp proxy: {e}");
@@ -609,14 +611,14 @@ fn panic_handler(info: &PanicHookInfo) {
         .map(|l| format!("{}:{}", l.file(), l.line()))
         .unwrap_or_default();
 
-    let full = CString::new(format!("Panic at {loc}:\n{msg}"))
+    let full = CString::new(format!("Internal error of the mod loader at {loc}:\n{msg}\n\nThe game starts; your mods may not be applied."))
         .unwrap_or_else(|_| CString::new("Panic at unknown location").unwrap());
 
     unsafe {
         MessageBoxA(
             None,
             PCSTR::from_raw(full.as_ptr() as _),
-            PCSTR::from_raw(c"Fatal error".as_ptr() as _),
+            PCSTR::from_raw(c"Enshrouded Mod Loader".as_ptr() as _),
             MB_OK,
         );
     }

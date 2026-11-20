@@ -84,7 +84,13 @@ pub fn init(config: Config) {
                 error = %e,
                 "Error running mod loader"
             );
-            panic!("Error running mod loader: {e}");
+            // The game files were not touched by this (a failure after that point is
+            // reported through `result.failure`): let the game start.
+            crate::show_message(
+                "Enshrouded Mod Loader",
+                &format!("The mod loader could not run:\n\n{e}\n\nThe game starts with the mods as they were applied the last time it worked."),
+            );
+            return;
         }
     };
 

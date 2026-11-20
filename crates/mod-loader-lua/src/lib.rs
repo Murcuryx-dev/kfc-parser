@@ -68,6 +68,8 @@ pub enum GameFileState {
     Unmodded,
     /// Writing failed part-way and the original index could not be put back.
     Broken,
+    /// The game files were written completely; the error came afterwards.
+    Applied,
 }
 
 impl RunFailure {
@@ -87,6 +89,8 @@ impl RunFailure {
             GameFileState::Broken =>
                 "The original game files could not be put back. The game may not start. \
                 Verify the game files in Steam.",
+            GameFileState::Applied =>
+                "The game files had already been written. The game starts with your mods applied.",
         };
 
         format!("{what}\n\n{}\n\n{state}", self.error)
@@ -94,7 +98,121 @@ impl RunFailure {
 
 }
 
+/// How far a run has come with the game files: decides what an internal error
+/// (a panic) leaves behind.
+mod phase {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    /// Nothing final has been written.
+    pub const BEFORE: u8 = 0;
+    /// The resource data file is being written in place; the index does not match it yet.
+    pub const WRITING: u8 = 1;
+    /// Index and data are complete.
+    pub const WRITTEN: u8 = 2;
+
+    static PHASE: AtomicU8 = AtomicU8::new(BEFORE);
+
+    pub fn set(phase: u8) {
+        PHASE.store(phase, Ordering::SeqCst);
+    }
+
+    pub fn get() -> u8 {
+        PHASE.load(Ordering::SeqCst)
+    }
+}
+
+/// Runs the mods. An internal error of the loader (a panic) does not leave this
+/// function: it is caught and returned as a [`RunFailure`], with the game files
+/// brought back to a state the game can start with.
 pub fn run(
+    env: &ModEnvironment,
+    args: RunArgs,
+) -> anyhow::Result<RunResult> {
+    let kfc_path = env.game_dir().join(format!("{}.kfc", args.file_name));
+    let dry_run = args.options.dry_run;
+
+    phase::set(phase::BEFORE);
+
+    match guarded(|| run_inner(env, args)) {
+        Ok(result) => result,
+        Err(error) => {
+            // Everything of the run has been dropped by now: temporary containers are
+            // removed and the files are closed.
+            let state = match phase::get() {
+                phase::WRITING if !dry_run => match crate::load::restore_backup(&kfc_path) {
+                    Ok(()) => GameFileState::Unmodded,
+                    Err(()) => GameFileState::Broken,
+                },
+                phase::WRITTEN if !dry_run => GameFileState::Applied,
+                _ => GameFileState::Unchanged,
+            };
+            let failure = RunFailure {
+                mod_id: None,
+                error: format!("Internal error of the mod loader: {error}"),
+                state,
+            };
+
+            crate::log::error!(
+                error = failure.error,
+                state = ?failure.state,
+                "The mod loader had an internal error"
+            );
+
+            Ok(RunResult {
+                dlls: Vec::new(),
+                failure: Some(failure),
+            })
+        }
+    }
+}
+
+/// Calls `f` and turns a panic into its message and place.
+fn guarded<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    use std::{cell::RefCell, panic};
+
+    thread_local! {
+        static LAST_PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    // The hook is the only place that knows where a panic happened. The one that was
+    // set before (the proxies show a message box and expect the process to end) is
+    // put back afterwards.
+    let previous = panic::take_hook();
+
+    panic::set_hook(Box::new(|info| {
+        let message = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown error".to_string()
+        };
+        let place = info.location()
+            .map(|l| format!(" (at {}:{})", l.file(), l.line()))
+            .unwrap_or_default();
+
+        LAST_PANIC.with(|last| *last.borrow_mut() = Some(format!("{message}{place}")));
+    }));
+
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
+
+    panic::set_hook(previous);
+
+    result.map_err(|_| {
+        LAST_PANIC.with(|last| last.borrow_mut().take())
+            .unwrap_or_else(|| "unknown error".to_string())
+    })
+}
+
+/// Lets a test make the loader fail at a chosen point: the environment variable
+/// `EML_TEST_PANIC` set to the name of the point (`mods` or `apply`).
+fn test_panic(point: &str) {
+    if std::env::var("EML_TEST_PANIC").is_ok_and(|wanted| wanted == point) {
+        panic!("test panic at '{point}' (EML_TEST_PANIC is set)");
+    }
+}
+
+fn run_inner(
     env: &ModEnvironment,
     mut args: RunArgs,
 ) -> anyhow::Result<RunResult> {
@@ -168,7 +286,11 @@ pub fn run(
     // written below. The files of the last successful run stay as they are, and the
     // cache is not updated, so the next start tries again.
 
-    if let Err(e) = runner.run() {
+    let ran = runner.run();
+
+    test_panic("mods");
+
+    if let Err(e) = ran {
         let failure = RunFailure {
             mod_id: Some(e.mod_id),
             error: e.error.to_string(),
@@ -200,6 +322,10 @@ pub fn run(
         // it only refers to original data, which is never written.
 
         let applied = (|| -> anyhow::Result<(usize, String)> {
+
+        if !dry_run {
+            phase::set(phase::WRITING);
+        }
 
         let mut buf = Vec::new();
         let mut writer = app_state.take_writer();
@@ -241,6 +367,9 @@ pub fn run(
                 if !dry_run {
                     writer.write_resource(resource_id, &buf)?;
                 }
+                if applied_resources == 10 {
+                    test_panic("apply");
+                }
                 {
                     use std::fmt::Write as _;
                     let _ = writeln!(listing, "{resource_id} {} {:016x}", buf.len(), fingerprint(&buf));
@@ -254,6 +383,7 @@ pub fn run(
             drop(writer);
         } else {
             writer.finalize()?;
+            phase::set(phase::WRITTEN);
         }
 
         Ok((applied_resources, listing))
@@ -336,6 +466,24 @@ fn fingerprint(bytes: &[u8]) -> u64 {
     }
 
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::guarded;
+
+    #[test]
+    fn a_panic_is_caught_with_its_message_and_place() {
+        assert_eq!(guarded(|| 7), Ok(7));
+
+        let error = guarded(|| -> u8 { panic!("went wrong: {}", 3) }).unwrap_err();
+
+        assert!(error.starts_with("went wrong: 3 (at "), "{error}");
+        assert!(error.contains("lib.rs:"), "{error}");
+
+        // the hook that was set before is back, and a second call starts clean
+        assert_eq!(guarded(|| 8), Ok(8));
+    }
 }
 
 pub fn export_lua_definitions(
