@@ -55,5 +55,11 @@ pub fn register(
     table::modify(&env.raw_get::<Table>("table")?, lua)?;
     log::register(lua, env, &r#mod.info().id)?;
 
+    // the parts of the API that are written in Lua on top of the ones above
+    lua.load(include_str!("prelude/animation.lua"))
+        .set_name("=eml/animation.lua")
+        .set_environment(env.clone())
+        .exec()?;
+
     Ok(())
 }
